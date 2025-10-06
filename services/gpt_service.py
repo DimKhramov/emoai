@@ -1,39 +1,27 @@
 import os
-import json
-import requests
+from openai import OpenAI
 from dotenv import load_dotenv
 from pathlib import Path
 import asyncio
 
 load_dotenv()
 
-def make_openai_request(messages, model="gpt-4o-mini", max_tokens=1000, temperature=0.7):
-    """Прямой HTTP запрос к OpenAI API без использования SDK"""
-    api_key = os.getenv("OPENAI_API_KEY")
-    
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    data = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature
-    }
-    
-    response = requests.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers=headers,
-        json=data,
-        timeout=30
-    )
-    
-    if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"]
-    else:
-        raise Exception(f"OpenAI API error: {response.status_code} - {response.text}")
+# Глобальный клиент OpenAI
+_openai_client = None
+
+def get_openai_client():
+    """Получает или создает клиент OpenAI"""
+    global _openai_client
+    if _openai_client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY не найден в переменных окружения")
+        
+        _openai_client = OpenAI(
+            api_key=api_key,
+            timeout=30.0
+        )
+    return _openai_client
 
 def load_system_prompt() -> str:
     """Загружает системный промпт из файла"""
@@ -56,9 +44,16 @@ async def chat_with_gpt(user_message, user_id=None):
             {"role": "user", "content": user_message}
         ]
         
-        # Выполняем HTTP запрос в отдельном потоке
+        # Получаем клиент и выполняем запрос в отдельном потоке
         def sync_request():
-            return make_openai_request(messages)
+            client = get_openai_client()
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                max_tokens=1000,
+                temperature=0.7
+            )
+            return response.choices[0].message.content
         
         response = await asyncio.to_thread(sync_request)
         return response
@@ -68,5 +63,12 @@ async def chat_with_gpt(user_message, user_id=None):
         return "Извините, произошла ошибка при обработке вашего сообщения. Попробуйте еще раз."
 
 def close_openai_client():
-    """Заглушка для совместимости - клиенты создаются для каждого запроса"""
-    pass
+    """Закрывает OpenAI клиент"""
+    global _openai_client
+    if _openai_client is not None:
+        try:
+            _openai_client.close()
+        except Exception as e:
+            print(f"Ошибка при закрытии OpenAI клиента: {e}")
+        finally:
+            _openai_client = None
