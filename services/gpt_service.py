@@ -1,5 +1,6 @@
 from openai import AsyncOpenAI
 import os
+import httpx
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -8,14 +9,20 @@ load_dotenv()
 
 # Глобальный клиент OpenAI
 _openai_client = None
+_http_client = None
 
 def get_openai_client():
     """Получает или создает глобальный клиент OpenAI"""
-    global _openai_client
+    global _openai_client, _http_client
     if _openai_client is None:
+        # Создаем собственный httpx клиент
+        _http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0),
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+        )
         _openai_client = AsyncOpenAI(
             api_key=os.getenv("OPENAI_API_KEY"),
-            timeout=30.0
+            http_client=_http_client
         )
     return _openai_client
 
@@ -65,12 +72,20 @@ async def chat_with_gpt(prompt: str, model: str = "gpt-4o-mini", conversation_hi
         return "Извини, у меня сейчас проблемы с ответом. Попробуй еще раз! 😅"
 
 async def close_openai_client():
-    """Закрывает глобальный клиент OpenAI"""
-    global _openai_client
-    if _openai_client is not None:
+    """Закрывает глобальный OpenAI клиент"""
+    global _openai_client, _http_client
+    if _openai_client:
         try:
             await _openai_client.close()
         except Exception as e:
             print(f"Ошибка при закрытии OpenAI клиента: {e}")
         finally:
             _openai_client = None
+    
+    if _http_client:
+        try:
+            await _http_client.aclose()
+        except Exception as e:
+            print(f"Ошибка при закрытии HTTP клиента: {e}")
+        finally:
+            _http_client = None
