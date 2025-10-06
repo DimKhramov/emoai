@@ -14,7 +14,8 @@ def get_openai_client():
     global _openai_client
     if _openai_client is None:
         _openai_client = AsyncOpenAI(
-            api_key=os.getenv("OPENAI_API_KEY")
+            api_key=os.getenv("OPENAI_API_KEY"),
+            timeout=30.0
         )
     return _openai_client
 
