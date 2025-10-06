@@ -67,10 +67,6 @@ async def chat_with_gpt(prompt: str, model: str = "gpt-4o-mini", conversation_hi
 async def close_openai_client():
     """Закрывает глобальный OpenAI клиент"""
     global _openai_client
-    if _openai_client:
-        try:
-            await _openai_client.close()
-        except Exception as e:
-            print(f"Ошибка при закрытии OpenAI клиента: {e}")
-        finally:
-            _openai_client = None
+    # Просто обнуляем клиент без явного закрытия
+    # чтобы избежать ошибки AsyncHttpxClientWrapper
+    _openai_client = None
