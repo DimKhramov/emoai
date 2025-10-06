@@ -1,16 +1,39 @@
 import os
-from openai import OpenAI
+import json
+import requests
 from dotenv import load_dotenv
 from pathlib import Path
 import asyncio
 
 load_dotenv()
 
-def get_openai_client():
-    """Создает новый синхронный клиент OpenAI для каждого запроса"""
-    return OpenAI(
-        api_key=os.getenv("OPENAI_API_KEY")
+def make_openai_request(messages, model="gpt-4o-mini", max_tokens=1000, temperature=0.7):
+    """Прямой HTTP запрос к OpenAI API без использования SDK"""
+    api_key = os.getenv("OPENAI_API_KEY")
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature
+    }
+    
+    response = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers=headers,
+        json=data,
+        timeout=30
     )
+    
+    if response.status_code == 200:
+        return response.json()["choices"][0]["message"]["content"]
+    else:
+        raise Exception(f"OpenAI API error: {response.status_code} - {response.text}")
 
 def load_system_prompt() -> str:
     """Загружает системный промпт из файла"""
@@ -27,23 +50,18 @@ async def chat_with_gpt(user_message, user_id=None):
         # Загружаем системный промпт
         system_prompt = load_system_prompt()
         
-        # Получаем синхронный клиент
-        client = get_openai_client()
+        # Формируем сообщения
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
+        ]
         
-        # Выполняем синхронный запрос в отдельном потоке
+        # Выполняем HTTP запрос в отдельном потоке
         def sync_request():
-            return client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message}
-                ],
-                max_tokens=1000,
-                temperature=0.7
-            )
+            return make_openai_request(messages)
         
         response = await asyncio.to_thread(sync_request)
-        return response.choices[0].message.content
+        return response
         
     except Exception as e:
         print(f"Ошибка при обращении к GPT: {e}")
