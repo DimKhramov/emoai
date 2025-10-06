@@ -44,7 +44,7 @@ async def stop_application():
         logger.info("Планировщик остановлен")
     
     # Закрываем OpenAI клиент
-    await close_openai_client()
+    close_openai_client()
     logger.info("OpenAI клиент закрыт")
 
 if __name__ == "__main__":
