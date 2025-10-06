@@ -6,17 +6,11 @@ import asyncio
 
 load_dotenv()
 
-# Глобальный синхронный клиент OpenAI
-_openai_client = None
-
 def get_openai_client():
-    """Получает или создает глобальный синхронный клиент OpenAI"""
-    global _openai_client
-    if _openai_client is None:
-        _openai_client = OpenAI(
-            api_key=os.getenv("OPENAI_API_KEY")
-        )
-    return _openai_client
+    """Создает новый синхронный клиент OpenAI для каждого запроса"""
+    return OpenAI(
+        api_key=os.getenv("OPENAI_API_KEY")
+    )
 
 def load_system_prompt() -> str:
     """Загружает системный промпт из файла"""
@@ -56,6 +50,5 @@ async def chat_with_gpt(user_message, user_id=None):
         return "Извините, произошла ошибка при обработке вашего сообщения. Попробуйте еще раз."
 
 def close_openai_client():
-    """Закрывает глобальный клиент OpenAI"""
-    global _openai_client
-    _openai_client = None
+    """Заглушка для совместимости - клиенты создаются для каждого запроса"""
+    pass
