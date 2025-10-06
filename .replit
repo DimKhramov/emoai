@@ -1,0 +1,12 @@
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["python", "app.py"]
+
+[[ports]]
+localPort = 8000
+externalPort = 80
+
+[env]
+PYTHON_LD_LIBRARY_PATH = "/nix/store/p21fdyxqb3yqflpim7g8s1mymgpnqiv7-python3-3.12.1/lib"
