@@ -45,7 +45,6 @@ async def chat_with_gpt(user_message, user_id=None, conversation_history=None):
         if conversation_history:
             messages.extend(conversation_history)
         
-        # Добавляем текущее сообщение пользователя
         messages.append({"role": "user", "content": user_message})
         
         # Получаем клиент и выполняем запрос в отдельном потоке
