@@ -1,11 +1,11 @@
-# Планировщик ежедневных уведомлений
+# Планировщик ежедневных уведомлений и автоматических платежей
 
 import asyncio
 import logging
 from datetime import datetime, time
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from storage.db import get_all_users
+from storage.db import get_all_users, get_users_for_auto_renewal, process_auto_renewal, get_users_for_renewal_reminder
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
@@ -25,8 +25,8 @@ class DailyReminderScheduler:
             "Привет! ✨ Хочешь просто поговорить? Я готов выслушать всё, что у тебя на сердце."
         ]
     
-    def start(self, reminder_time: time = time(10, 0)):
-        """Запуск планировщика с ежедневными напоминаниями"""
+    def start(self, reminder_time: time = time(8, 53)):
+        """Запуск планировщика с ежедневными напоминаниями и автоматическими платежами"""
         # Добавляем задачу на отправку ежедневных напоминаний
         self.scheduler.add_job(
             self.send_daily_reminders,
@@ -36,8 +36,26 @@ class DailyReminderScheduler:
             replace_existing=True
         )
         
+        # Добавляем задачу на отправку напоминаний о предстоящем автосписании (каждый день в 11:00)
+        self.scheduler.add_job(
+            self.send_renewal_reminders,
+            CronTrigger(hour=11, minute=0),
+            id='renewal_reminder',
+            name='Напоминания о предстоящем автосписании',
+            replace_existing=True
+        )
+        
+        # Добавляем задачу на автоматическое продление подписок (каждый день в 12:00)
+        self.scheduler.add_job(
+            self.process_auto_renewals,
+            CronTrigger(hour=12, minute=0),
+            id='auto_renewal',
+            name='Автоматическое продление подписок',
+            replace_existing=True
+        )
+        
         self.scheduler.start()
-        logger.info(f"Планировщик запущен. Ежедневные напоминания в {reminder_time.strftime('%H:%M')}")
+        logger.info(f"Планировщик запущен. Ежедневные напоминания в {reminder_time.strftime('%H:%M')}, напоминания об автосписании в 11:00, автопродление в 12:00")
     
     def stop(self):
         """Остановка планировщика"""
@@ -99,3 +117,93 @@ class DailyReminderScheduler:
         except Exception as e:
             logger.error(f"Ошибка отправки тестового напоминания пользователю {user_id}: {e}")
             return False
+    
+    async def process_auto_renewals(self):
+        """Обработка автоматических продлений подписок"""
+        try:
+            users_for_renewal = get_users_for_auto_renewal()
+            if not users_for_renewal:
+                logger.info("Нет пользователей для автоматического продления подписок")
+                return
+            
+            renewed_count = 0
+            failed_count = 0
+            insufficient_funds_count = 0
+            
+            for user in users_for_renewal:
+                user_id = user['telegram_id']
+                
+                try:
+                    # process_auto_renewal теперь сам определяет стоимость по типу подписки
+                    success = process_auto_renewal(user_id)
+                    if success:
+                        renewed_count += 1
+                        # Уведомляем пользователя об успешном продлении
+                        await self.bot.send_message(
+                            chat_id=user_id,
+                            text="✅ Ваша премиум подписка автоматически продлена!\n"
+                                 "Спасибо за использование нашего сервиса! 💫"
+                        )
+                    else:
+                        failed_count += 1
+                        # Уведомляем пользователя о проблеме с продлением
+                        await self.bot.send_message(
+                            chat_id=user_id,
+                            text="⚠️ Не удалось автоматически продлить премиум подписку!\n\n"
+                                 "Используйте /premium для управления подпиской."
+                        )
+                        
+                except TelegramForbiddenError:
+                    logger.warning(f"Пользователь {user_id} заблокировал бота")
+                    failed_count += 1
+                except Exception as e:
+                    logger.error(f"Ошибка при обработке автопродления для пользователя {user_id}: {e}")
+                    failed_count += 1
+            
+            logger.info(f"Автопродление завершено. Продлено: {renewed_count}, Ошибок: {failed_count}, Недостаточно средств: {insufficient_funds_count}")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обработке автопродлений: {e}")
+
+    async def send_renewal_reminders(self):
+        """Отправка напоминаний о предстоящем автоматическом списании"""
+        try:
+            users = get_users_for_renewal_reminder()
+            
+            if not users:
+                logger.info("Нет пользователей для отправки напоминаний об автосписании")
+                return
+            
+            sent_count = 0
+            failed_count = 0
+            
+            for user in users:
+                try:
+                    user_id = user['telegram_id']
+                    subscription_end = user['subscription_end_date']
+                    
+                    # Формируем сообщение о предстоящем автопродлении
+                    message = (
+                        "🔔 Напоминание об автопродлении\n\n"
+                        f"📅 Ваша премиум подписка истекает {subscription_end}\n\n"
+                        "✅ Через 3 дня подписка будет автоматически продлена на месяц.\n\n"
+                        "Если хотите отключить автопродление, используйте /premium"
+                    )
+                    
+                    await self.bot.send_message(chat_id=user_id, text=message)
+                    sent_count += 1
+                    
+                except TelegramForbiddenError:
+                    logger.warning(f"Пользователь {user_id} заблокировал бота")
+                    failed_count += 1
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке напоминания пользователю {user_id}: {e}")
+                    failed_count += 1
+            
+            logger.info(f"Напоминания об автосписании отправлены. Успешно: {sent_count}, Ошибок: {failed_count}")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при отправке напоминаний об автосписании: {e}")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обработке автоматических продлений: {e}")

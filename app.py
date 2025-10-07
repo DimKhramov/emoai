@@ -9,6 +9,7 @@ import logging
 import signal
 from integrations.telegram import main as telegram_main, bot
 from services.scheduler import DailyReminderScheduler
+from services.gpt_service import close_openai_client
 from config import SchedulerConfig, LoggingConfig
 
 # Настройка логирования
@@ -35,12 +36,16 @@ async def start_application():
     # Запуск основного приложения
     await telegram_main()
 
-def stop_application():
+async def stop_application():
     """Остановка приложения"""
     global scheduler
     if scheduler:
         scheduler.stop()
         logger.info("Планировщик остановлен")
+    
+    # Закрываем OpenAI клиент
+    close_openai_client()
+    logger.info("OpenAI клиент закрыт")
 
 if __name__ == "__main__":
     logger.info("Запуск Telegram бота 'Эмо-друг'...")
@@ -48,7 +53,7 @@ if __name__ == "__main__":
         asyncio.run(start_application())
     except KeyboardInterrupt:
         logger.info("Бот остановлен пользователем")
-        stop_application()
+        asyncio.run(stop_application())
     except Exception as e:
         logger.error(f"Ошибка при запуске бота: {e}")
-        stop_application()
+        asyncio.run(stop_application())

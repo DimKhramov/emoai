@@ -1,10 +1,27 @@
-from openai import AsyncOpenAI
 import os
+from openai import OpenAI
 from dotenv import load_dotenv
 from pathlib import Path
+import asyncio
 
-# Загрузка переменных окружения из .env файла
 load_dotenv()
+
+# Глобальный клиент OpenAI
+_openai_client = None
+
+def get_openai_client():
+    """Получает или создает клиент OpenAI"""
+    global _openai_client
+    if _openai_client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY не найден в переменных окружения")
+        
+        _openai_client = OpenAI(
+            api_key=api_key,
+            timeout=30.0
+        )
+    return _openai_client
 
 def load_system_prompt() -> str:
     """Загружает системный промпт из файла"""
@@ -15,38 +32,47 @@ def load_system_prompt() -> str:
     except FileNotFoundError:
         return "Ты — «Эмо-друг», ИИ-агент в Телеграме. Будь поддерживающим и эмоциональным собеседником."
 
-async def chat_with_gpt(prompt: str, model: str = "gpt-4o-mini", conversation_history: list = None) -> str:
-    """
-    Отправляет запрос к ChatGPT и возвращает ответ.
-
-    :param prompt: Текст запроса для ChatGPT.
-    :param model: Модель ChatGPT (по умолчанию "gpt-4o-mini").
-    :param conversation_history: История разговора для контекста.
-    :return: Ответ от ChatGPT.
-    """
-    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    
-    # Загружаем системный промпт
-    system_prompt = load_system_prompt()
-    
-    # Формируем сообщения
-    messages = [{"role": "system", "content": system_prompt}]
-    
-    # Добавляем историю разговора если есть
-    if conversation_history:
-        messages.extend(conversation_history[-10:])  # Берем последние 10 сообщений
-    
-    # Добавляем текущий запрос
-    messages.append({"role": "user", "content": prompt})
-
+async def chat_with_gpt(user_message, user_id=None, conversation_history=None):
+    """Отправляет сообщение в GPT и возвращает ответ"""
     try:
-        response = await client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=0.8,  # Делаем ответы более креативными
-            max_tokens=500    # Ограничиваем длину ответа
-        )
-        return response.choices[0].message.content.strip()
+        # Загружаем системный промпт
+        system_prompt = load_system_prompt()
+        
+        # Формируем сообщения
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Добавляем историю разговора если есть
+        if conversation_history:
+            messages.extend(conversation_history)
+        
+        # Добавляем текущее сообщение пользователя
+        messages.append({"role": "user", "content": user_message})
+        
+        # Получаем клиент и выполняем запрос в отдельном потоке
+        def sync_request():
+            client = get_openai_client()
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                max_tokens=1000,
+                temperature=0.7
+            )
+            return response.choices[0].message.content
+        
+        response = await asyncio.to_thread(sync_request)
+        return response
+        
     except Exception as e:
-        print(f"Ошибка GPT API: {e}")
-        return "Извини, у меня сейчас проблемы с ответом. Попробуй еще раз! 😅"
+        print(f"Ошибка при обращении к GPT: {e}")
+        return "Извините, произошла ошибка при обработке вашего сообщения. Попробуйте еще раз."
+
+def close_openai_client():
+    """Закрывает OpenAI клиент"""
+    global _openai_client
+    if _openai_client is not None:
+        try:
+            _openai_client.close()
+        except Exception as e:
+            print(f"Ошибка при закрытии OpenAI клиента: {e}")
+        finally:
+            _openai_client = None

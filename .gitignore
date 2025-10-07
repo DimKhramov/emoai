@@ -82,3 +82,17 @@ logs/
 # Temporary files
 *.tmp
 *.temp
+
+# Replit specific
+.replit
+replit.nix
+.config/
+.upm/
+.breakpoints
+venv/
+.pythonlibs/
+
+# Secrets and tokens
+*.key
+*.pem
+secrets.json

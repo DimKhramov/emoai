@@ -2,7 +2,7 @@
 
 import sqlite3
 
-DB_PATH = "database.sqlite"
+DB_PATH = "storage/database.sqlite"
 
 def initialize_database():
     """
@@ -18,10 +18,51 @@ def initialize_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,
             telegram_id INTEGER UNIQUE NOT NULL,
+            daily_message_count INTEGER DEFAULT 0,
+            last_message_date DATE DEFAULT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
+    
+    # Добавляем новые поля в существующую таблицу, если их нет
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN daily_message_count INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # Поле уже существует
+    
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN last_message_date DATE DEFAULT NULL")
+    except sqlite3.OperationalError:
+        pass  # Поле уже существует
+    
+    # Добавляем поля для системы оплаты через Telegram Stars
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN premium_status BOOLEAN DEFAULT FALSE")
+    except sqlite3.OperationalError:
+        pass  # Поле уже существует
+    
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN stars_balance INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # Поле уже существует
+    
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN subscription_end_date DATE DEFAULT NULL")
+    except sqlite3.OperationalError:
+        pass  # Поле уже существует
+    
+    # Добавляем поле для автоматических платежей
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN auto_renewal BOOLEAN DEFAULT FALSE")
+    except sqlite3.OperationalError:
+        pass  # Поле уже существует
+    
+    # Добавляем поле для типа подписки (1, 7, 30 дней)
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN subscription_type INTEGER DEFAULT 30")
+    except sqlite3.OperationalError:
+        pass  # Поле уже существует
 
     # Таблица сообщений
     cursor.execute(
@@ -104,7 +145,7 @@ def get_user_by_telegram_id(telegram_id: int) -> dict:
     cursor = connection.cursor()
     
     cursor.execute(
-        "SELECT id, username, created_at FROM users WHERE telegram_id = ?",
+        "SELECT id, username, created_at, premium_status, subscription_end_date, auto_renewal, subscription_type FROM users WHERE telegram_id = ?",
         (telegram_id,)
     )
     user = cursor.fetchone()
@@ -115,7 +156,11 @@ def get_user_by_telegram_id(telegram_id: int) -> dict:
             'id': user[0],
             'username': user[1],
             'telegram_id': telegram_id,
-            'created_at': user[2]
+            'created_at': user[2],
+            'premium_status': bool(user[3]) if user[3] is not None else False,
+            'subscription_end_date': user[4],
+            'auto_renewal': bool(user[5]) if user[5] is not None else False,
+            'subscription_type': user[6] or 30
         }
     return None
 
@@ -219,6 +264,384 @@ def get_all_users():
         'telegram_id': user[2],
         'created_at': user[3]
     } for user in users]
+
+def check_daily_message_limit(telegram_id: int, limit: int = 10) -> bool:
+    """
+    Проверяет, не превышен ли дневной лимит сообщений для пользователя.
+    
+    Args:
+        telegram_id: ID пользователя в Telegram
+        limit: Максимальное количество сообщений в день (по умолчанию 10)
+    
+    Returns:
+        True если лимит не превышен, False если превышен
+    """
+    from datetime import date
+    
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    
+    today = date.today().isoformat()
+    
+    cursor.execute(
+        "SELECT daily_message_count, last_message_date FROM users WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    result = cursor.fetchone()
+    
+    if not result:
+        connection.close()
+        return True  # Пользователь не найден, разрешаем
+    
+    daily_count, last_date = result
+    
+    # Если это новый день, сбрасываем счетчик
+    if last_date != today:
+        daily_count = 0
+    
+    connection.close()
+    return daily_count < limit
+
+def increment_daily_message_count(telegram_id: int):
+    """
+    Увеличивает счетчик ежедневных сообщений пользователя.
+    
+    Args:
+        telegram_id: ID пользователя в Telegram
+    """
+    from datetime import date
+    
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    
+    today = date.today().isoformat()
+    
+    cursor.execute(
+        "SELECT daily_message_count, last_message_date FROM users WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    result = cursor.fetchone()
+    
+    if result:
+        daily_count, last_date = result
+        
+        # Если это новый день, сбрасываем счетчик
+        if last_date != today:
+            daily_count = 0
+        
+        # Увеличиваем счетчик и обновляем дату
+        new_count = daily_count + 1
+        cursor.execute(
+            "UPDATE users SET daily_message_count = ?, last_message_date = ? WHERE telegram_id = ?",
+            (new_count, today, telegram_id)
+        )
+    
+    connection.commit()
+    connection.close()
+
+def get_daily_message_count(telegram_id: int) -> int:
+    """
+    Получает текущий счетчик ежедневных сообщений пользователя.
+    
+    Args:
+        telegram_id: ID пользователя в Telegram
+    
+    Returns:
+        Количество сообщений за сегодня
+    """
+    from datetime import date
+    
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    
+    today = date.today().isoformat()
+    
+    cursor.execute(
+        "SELECT daily_message_count, last_message_date FROM users WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    result = cursor.fetchone()
+    
+    if not result:
+        connection.close()
+        return 0
+    
+    daily_count, last_date = result
+    
+    # Если это новый день, счетчик равен 0
+    if last_date != today:
+        daily_count = 0
+    
+    connection.close()
+    return daily_count
+
+def get_user_premium_status(telegram_id: int) -> dict:
+    """
+    Получает информацию о премиум статусе пользователя.
+    
+    Args:
+        telegram_id: ID пользователя в Telegram
+    
+    Returns:
+        Словарь с информацией о премиум статусе
+    """
+    from datetime import date
+    
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    
+    cursor.execute(
+        "SELECT premium_status, subscription_end_date, auto_renewal FROM users WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    result = cursor.fetchone()
+
+    if not result:
+        connection.close()
+        return {"premium_status": False, "subscription_end_date": None, "auto_renewal": False}
+
+    premium_status, subscription_end, auto_renewal = result
+    
+    # Проверяем, не истекла ли подписка
+    if subscription_end:
+        subscription_end_date = date.fromisoformat(subscription_end)
+        if subscription_end_date < date.today():
+            # Подписка истекла, обновляем статус
+            cursor.execute(
+                "UPDATE users SET premium_status = FALSE WHERE telegram_id = ?",
+                (telegram_id,)
+            )
+            connection.commit()
+            premium_status = False
+    
+    connection.close()
+    return {
+        "premium_status": bool(premium_status),
+        "subscription_end_date": subscription_end,
+        "auto_renewal": bool(auto_renewal)
+    }
+
+def activate_premium_subscription(telegram_id: int, days: int = 30):
+    """
+    Активирует премиум подписку для пользователя.
+    
+    Args:
+        telegram_id: ID пользователя в Telegram
+        days: Количество дней подписки (по умолчанию 30)
+    """
+    from datetime import date, timedelta
+    
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    
+    # Получаем текущую дату окончания подписки
+    cursor.execute(
+        "SELECT subscription_end_date FROM users WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    result = cursor.fetchone()
+    
+    if result and result[0]:
+        # Если подписка уже есть, продлеваем её
+        current_end = date.fromisoformat(result[0])
+        if current_end > date.today():
+            new_end = current_end + timedelta(days=days)
+        else:
+            new_end = date.today() + timedelta(days=days)
+    else:
+        # Новая подписка
+        new_end = date.today() + timedelta(days=days)
+    
+    cursor.execute(
+        "UPDATE users SET premium_status = TRUE, subscription_end_date = ?, subscription_type = ?, auto_renewal = TRUE WHERE telegram_id = ?",
+        (new_end.isoformat(), days, telegram_id)
+    )
+    
+    connection.commit()
+    connection.close()
+
+def get_all_premium_users() -> list:
+    """
+    Получает список всех активных премиум пользователей.
+    
+    Returns:
+        Список словарей с информацией о премиум пользователях
+    """
+    from datetime import date
+    
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    
+    today = date.today().isoformat()
+    
+    cursor.execute(
+        """
+        SELECT telegram_id, username, subscription_end_date 
+        FROM users 
+        WHERE premium_status = TRUE 
+        AND (subscription_end_date IS NULL OR subscription_end_date >= ?)
+        """,
+        (today,)
+    )
+    
+    users = cursor.fetchall()
+    connection.close()
+    
+    return [{
+        'telegram_id': user[0],
+        'username': user[1],
+        'subscription_end': user[2]
+    } for user in users]
+
+def get_users_for_renewal_reminder():
+    """
+    Получает список пользователей с активным автопродлением, которым нужно отправить напоминание 
+    о предстоящем автоматическом списании (за 3 дня до истечения подписки).
+    
+    Returns:
+        Список пользователей для отправки напоминания
+    """
+    from datetime import date, timedelta
+    
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    
+    # Получаем пользователей с автопродлением, у которых подписка истекает через 3 дня
+    reminder_date = date.today() + timedelta(days=3)
+    
+    cursor.execute(
+        """
+        SELECT telegram_id, username, subscription_end_date 
+        FROM users 
+        WHERE auto_renewal = TRUE 
+        AND premium_status = TRUE
+        AND subscription_end_date IS NOT NULL 
+        AND subscription_end_date = ?
+        """,
+        (reminder_date.isoformat(),)
+    )
+    
+    users = cursor.fetchall()
+    connection.close()
+    
+    return [
+        {
+            'telegram_id': user[0],
+            'username': user[1],
+            'subscription_end_date': user[2]
+        }
+        for user in users
+    ]
+
+def set_auto_renewal(telegram_id: int, auto_renewal: bool):
+    """
+    Устанавливает статус автоматического продления подписки для пользователя.
+    
+    Args:
+        telegram_id: ID пользователя в Telegram
+        auto_renewal: Включить/выключить автоматическое продление
+    """
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    
+    cursor.execute(
+        "UPDATE users SET auto_renewal = ? WHERE telegram_id = ?",
+        (auto_renewal, telegram_id)
+    )
+    
+    connection.commit()
+    connection.close()
+
+def get_users_for_auto_renewal():
+    """
+    Получает список пользователей с активным автопродлением, у которых подписка истекает сегодня.
+    
+    Returns:
+        Список пользователей для автоматического продления
+    """
+    from datetime import date
+    
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    
+    # Получаем пользователей с автопродлением, у которых подписка истекает сегодня
+    today = date.today()
+    
+    cursor.execute(
+        """
+        SELECT telegram_id, username, subscription_end_date 
+        FROM users 
+        WHERE auto_renewal = TRUE 
+        AND premium_status = TRUE
+        AND subscription_end_date IS NOT NULL 
+        AND subscription_end_date = ?
+        """,
+        (today.isoformat(),)
+    )
+    
+    users = cursor.fetchall()
+    connection.close()
+    
+    return [{
+        'telegram_id': user[0],
+        'username': user[1],
+        'subscription_end': user[2]
+    } for user in users]
+
+def process_auto_renewal(telegram_id: int) -> bool:
+    """
+    Обрабатывает автоматическое продление подписки для пользователя.
+    Использует сохраненный тип подписки для определения продолжительности.
+    Автопродление теперь работает без списания звезд.
+    
+    Args:
+        telegram_id: ID пользователя в Telegram
+    
+    Returns:
+        True если продление успешно
+    """
+    from datetime import date, timedelta
+    
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    
+    # Получаем информацию о пользователе: тип подписки
+    cursor.execute(
+        "SELECT subscription_type FROM users WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    result = cursor.fetchone()
+    
+    if not result:
+        connection.close()
+        return False
+    
+    subscription_type = result[0]
+    
+    # Определяем продолжительность в зависимости от типа подписки
+    if subscription_type == 1:
+        days = 1
+    elif subscription_type == 7:
+        days = 7
+    else:  # subscription_type == 30
+        days = 30
+    
+    # Продлеваем подписку на соответствующий период
+    new_end_date = date.today() + timedelta(days=days)
+    
+    cursor.execute(
+        """
+        UPDATE users 
+        SET subscription_end_date = ?,
+            premium_status = TRUE
+        WHERE telegram_id = ?
+        """,
+        (new_end_date.isoformat(), telegram_id)
+    )
+    
+    connection.commit()
+    connection.close()
+    return True
 
 if __name__ == "__main__":
     initialize_database()
