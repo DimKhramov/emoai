@@ -8,6 +8,7 @@ from apscheduler.triggers.cron import CronTrigger
 from storage.db import get_all_users, get_users_for_auto_renewal, process_auto_renewal, get_users_for_renewal_reminder
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from config import SchedulerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +26,12 @@ class DailyReminderScheduler:
             "Привет! ✨ Хочешь просто поговорить? Я готов выслушать всё, что у тебя на сердце."
         ]
     
-    def start(self, reminder_time: time = time(8, 53)):
+    def start(self, reminder_time: time = None):
         """Запуск планировщика с ежедневными напоминаниями и автоматическими платежами"""
+        # Используем время из конфигурации, если не передано явно
+        if reminder_time is None:
+            reminder_time = SchedulerConfig.DAILY_REMINDER_TIME
+            
         # Добавляем задачу на отправку ежедневных напоминаний
         self.scheduler.add_job(
             self.send_daily_reminders,
@@ -36,26 +41,26 @@ class DailyReminderScheduler:
             replace_existing=True
         )
         
-        # Добавляем задачу на отправку напоминаний о предстоящем автосписании (каждый день в 11:00)
+        # Добавляем задачу на отправку напоминаний о предстоящем автосписании
         self.scheduler.add_job(
             self.send_renewal_reminders,
-            CronTrigger(hour=11, minute=0),
+            CronTrigger(hour=SchedulerConfig.RENEWAL_REMINDER_HOUR, minute=SchedulerConfig.RENEWAL_REMINDER_MINUTE),
             id='renewal_reminder',
             name='Напоминания о предстоящем автосписании',
             replace_existing=True
         )
         
-        # Добавляем задачу на автоматическое продление подписок (каждый день в 12:00)
+        # Добавляем задачу на автоматическое продление подписок
         self.scheduler.add_job(
             self.process_auto_renewals,
-            CronTrigger(hour=12, minute=0),
+            CronTrigger(hour=SchedulerConfig.AUTO_RENEWAL_HOUR, minute=SchedulerConfig.AUTO_RENEWAL_MINUTE),
             id='auto_renewal',
             name='Автоматическое продление подписок',
             replace_existing=True
         )
         
         self.scheduler.start()
-        logger.info(f"Планировщик запущен. Ежедневные напоминания в {reminder_time.strftime('%H:%M')}, напоминания об автосписании в 11:00, автопродление в 12:00")
+        logger.info(f"Планировщик запущен. Ежедневные напоминания в {reminder_time.strftime('%H:%M')}, напоминания об автосписании в {SchedulerConfig.RENEWAL_REMINDER_HOUR:02d}:{SchedulerConfig.RENEWAL_REMINDER_MINUTE:02d}, автопродление в {SchedulerConfig.AUTO_RENEWAL_HOUR:02d}:{SchedulerConfig.AUTO_RENEWAL_MINUTE:02d}")
     
     def stop(self):
         """Остановка планировщика"""

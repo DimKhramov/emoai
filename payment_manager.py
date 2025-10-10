@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from aiogram import Bot, types
 from aiogram.types import LabeledPrice, PreCheckoutQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
+from config import PremiumConfig
 
 from storage.db import (
     get_user_premium_status, activate_premium_subscription,
@@ -25,9 +26,9 @@ bot = Bot(token=API_TOKEN)
 
 # Конфигурация цен (в звездах Telegram)
 PREMIUM_PRICES = {
-    "monthly": {"stars": 100, "days": 30, "title": "Премиум на месяц"},
-    "weekly": {"stars": 30, "days": 7, "title": "Премиум на неделю"},
-    "daily": {"stars": 10, "days": 1, "title": "Премиум на день"}
+    "monthly": {"stars": PremiumConfig.MONTHLY_PRICE, "days": PremiumConfig.MONTHLY_DAYS, "title": "Премиум на месяц"},
+    "weekly": {"stars": PremiumConfig.WEEKLY_PRICE, "days": PremiumConfig.WEEKLY_DAYS, "title": "Премиум на неделю"},
+    "daily": {"stars": PremiumConfig.DAILY_PRICE, "days": PremiumConfig.DAILY_DAYS, "title": "Премиум на день"}
 }
 
 def create_star_invoice(title: str, description: str, payload: str, star_count: int) -> dict:
@@ -111,11 +112,11 @@ async def send_premium_offer(bot: Bot, user_id: int):
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🌟 День • 10 ⭐", callback_data="buy_premium_daily"),
-            InlineKeyboardButton(text="✨ Неделя • 30 ⭐", callback_data="buy_premium_weekly")
+            InlineKeyboardButton(text=f"🌟 День • {PremiumConfig.DAILY_PRICE} ⭐", callback_data="buy_premium_daily"),
+            InlineKeyboardButton(text=f"✨ Неделя • {PremiumConfig.WEEKLY_PRICE} ⭐", callback_data="buy_premium_weekly")
         ],
         [
-            InlineKeyboardButton(text="💎 МЕСЯЦ • 100 ⭐ 🔥", callback_data="buy_premium_monthly")
+            InlineKeyboardButton(text=f"💎 МЕСЯЦ • {PremiumConfig.MONTHLY_PRICE} ⭐ 🔥", callback_data="buy_premium_monthly")
         ],
         [
             InlineKeyboardButton(text="💰 Проверить баланс", callback_data="check_balance")
@@ -133,7 +134,7 @@ async def send_premium_offer(bot: Bot, user_id: int):
     
     auto_renewal_text = ""
     if auto_renewal_status:
-        auto_renewal_text = "\n🔄 *Автопродление включено* - подписка будет автоматически продлеваться каждый месяц за 100 ⭐"
+        auto_renewal_text = f"\n🔄 *Автопродление включено* - подписка будет автоматически продлеваться каждый месяц за {PremiumConfig.MONTHLY_PRICE} ⭐"
     
     offer_text = (
         "🌟 ПРЕМИУМ ПОДПИСКА 🌟\n\n"
@@ -143,9 +144,9 @@ async def send_premium_offer(bot: Bot, user_id: int):
         "• 🎨 Расширенные функции\n"
         "• 💎 Эксклюзивный контент\n\n"
         "💰 Тарифы:\n"
-        "🌟 День: 10 ⭐ (экономия 0%)\n"
-        "✨ Неделя: 30 ⭐ (экономия 57%)\n"
-        "💎 МЕСЯЦ: 100 ⭐ (экономия 67%) 🔥\n\n"
+        f"🌟 День: {PremiumConfig.DAILY_PRICE} ⭐ (экономия 0%)\n"
+        f"✨ Неделя: {PremiumConfig.WEEKLY_PRICE} ⭐ (экономия 57%)\n"
+        f"💎 МЕСЯЦ: {PremiumConfig.MONTHLY_PRICE} ⭐ (экономия 67%) 🔥\n\n"
         "🔥 Самый выгодный тариф - МЕСЯЦ!\n"
         f"{auto_renewal_text}\n"
         "Выберите подходящий план:"

@@ -1,14 +1,16 @@
 # Работа с SQLite
 
 import sqlite3
+from config import DatabaseConfig, LimitsConfig
 
-DB_PATH = "storage/database.sqlite"
+DB_PATH = DatabaseConfig.DB_PATH
 
 def initialize_database():
     """
     Инициализация базы данных и создание таблиц.
     """
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(DB_PATH, timeout=10.0)
+    connection.execute("PRAGMA journal_mode=WAL")
     cursor = connection.cursor()
 
     # Таблица пользователей
@@ -58,9 +60,25 @@ def initialize_database():
     except sqlite3.OperationalError:
         pass  # Поле уже существует
     
-    # Добавляем поле для типа подписки (1, 7, 30 дней)
+    # Добавляем поле для типа подписки (дни подписки)
     try:
-        cursor.execute("ALTER TABLE users ADD COLUMN subscription_type INTEGER DEFAULT 30")
+        cursor.execute(f"ALTER TABLE users ADD COLUMN subscription_type INTEGER DEFAULT {LimitsConfig.DEFAULT_SUBSCRIPTION_DAYS}")
+    except sqlite3.OperationalError:
+        pass  # Поле уже существует
+    
+    # Добавляем поля для пользовательских предпочтений
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN use_emojis BOOLEAN DEFAULT TRUE")
+    except sqlite3.OperationalError:
+        pass  # Поле уже существует
+    
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN communication_style TEXT DEFAULT 'friendly'")
+    except sqlite3.OperationalError:
+        pass  # Поле уже существует
+    
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN preferred_response_length TEXT DEFAULT 'medium'")
     except sqlite3.OperationalError:
         pass  # Поле уже существует
 
@@ -115,27 +133,33 @@ def add_user(username: str, telegram_id: int) -> int:
     Добавляет нового пользователя в базу данных.
     Возвращает ID пользователя или существующий ID если пользователь уже есть.
     """
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(DB_PATH, timeout=10.0)
+    connection.execute("PRAGMA journal_mode=WAL")
     cursor = connection.cursor()
     
-    # Проверяем, существует ли пользователь
-    cursor.execute("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,))
-    existing_user = cursor.fetchone()
-    
-    if existing_user:
+    try:
+        # Проверяем, существует ли пользователь
+        cursor.execute("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,))
+        existing_user = cursor.fetchone()
+        
+        if existing_user:
+            return existing_user[0]
+        
+        # Добавляем нового пользователя
+        cursor.execute(
+            "INSERT INTO users (username, telegram_id, created_at) VALUES (?, ?, datetime('now'))",
+            (username, telegram_id)
+        )
+        user_id = cursor.lastrowid
+        connection.commit()
+        
+        return user_id
+    except sqlite3.OperationalError as e:
+        print(f"Database error in add_user: {e}")
+        # Возвращаем 0 в случае ошибки, чтобы не ломать логику
+        return 0
+    finally:
         connection.close()
-        return existing_user[0]
-    
-    # Добавляем нового пользователя
-    cursor.execute(
-        "INSERT INTO users (username, telegram_id) VALUES (?, ?)",
-        (username, telegram_id)
-    )
-    user_id = cursor.lastrowid
-    connection.commit()
-    connection.close()
-    
-    return user_id
 
 def get_user_by_telegram_id(telegram_id: int) -> dict:
     """
@@ -145,7 +169,7 @@ def get_user_by_telegram_id(telegram_id: int) -> dict:
     cursor = connection.cursor()
     
     cursor.execute(
-        "SELECT id, username, created_at, premium_status, subscription_end_date, auto_renewal, subscription_type FROM users WHERE telegram_id = ?",
+        "SELECT id, username, created_at, premium_status, subscription_end_date, auto_renewal, subscription_type, use_emojis, communication_style, preferred_response_length FROM users WHERE telegram_id = ?",
         (telegram_id,)
     )
     user = cursor.fetchone()
@@ -160,7 +184,10 @@ def get_user_by_telegram_id(telegram_id: int) -> dict:
             'premium_status': bool(user[3]) if user[3] is not None else False,
             'subscription_end_date': user[4],
             'auto_renewal': bool(user[5]) if user[5] is not None else False,
-            'subscription_type': user[6] or 30
+            'subscription_type': user[6] or LimitsConfig.DEFAULT_SUBSCRIPTION_DAYS,
+            'use_emojis': bool(user[7]) if user[7] is not None else True,
+            'communication_style': user[8] or 'friendly',
+            'preferred_response_length': user[9] or 'medium'
         }
     return None
 
@@ -265,17 +292,24 @@ def get_all_users():
         'created_at': user[3]
     } for user in users]
 
-def check_daily_message_limit(telegram_id: int, limit: int = 10) -> bool:
+def check_daily_message_limit(telegram_id: int, limit: int = None) -> bool:
     """
     Проверяет, не превышен ли дневной лимит сообщений для пользователя.
     
     Args:
         telegram_id: ID пользователя в Telegram
-        limit: Максимальное количество сообщений в день (по умолчанию 10)
+        limit: Максимальное количество сообщений в день (по умолчанию из конфигурации)
     
     Returns:
         True если лимит не превышен, False если превышен
     """
+    # Сначала проверяем премиум статус
+    premium_info = get_user_premium_status(telegram_id)
+    if premium_info and premium_info['premium_status']:
+        return True  # Премиум пользователи имеют безлимитный доступ
+    
+    if limit is None:
+        limit = LimitsConfig.DAILY_MESSAGE_LIMIT
     from datetime import date
     
     connection = sqlite3.connect(DB_PATH)
@@ -421,14 +455,16 @@ def get_user_premium_status(telegram_id: int) -> dict:
         "auto_renewal": bool(auto_renewal)
     }
 
-def activate_premium_subscription(telegram_id: int, days: int = 30):
+def activate_premium_subscription(telegram_id: int, days: int = None):
     """
     Активирует премиум подписку для пользователя.
     
     Args:
         telegram_id: ID пользователя в Telegram
-        days: Количество дней подписки (по умолчанию 30)
+        days: Количество дней подписки (по умолчанию из конфигурации)
     """
+    if days is None:
+        days = LimitsConfig.DEFAULT_SUBSCRIPTION_DAYS
     from datetime import date, timedelta
     
     connection = sqlite3.connect(DB_PATH)
@@ -623,8 +659,8 @@ def process_auto_renewal(telegram_id: int) -> bool:
         days = 1
     elif subscription_type == 7:
         days = 7
-    else:  # subscription_type == 30
-        days = 30
+    else:  # subscription_type == DEFAULT_SUBSCRIPTION_DAYS
+        days = LimitsConfig.DEFAULT_SUBSCRIPTION_DAYS
     
     # Продлеваем подписку на соответствующий период
     new_end_date = date.today() + timedelta(days=days)
@@ -642,6 +678,63 @@ def process_auto_renewal(telegram_id: int) -> bool:
     connection.commit()
     connection.close()
     return True
+
+def update_user_preferences(telegram_id: int, use_emojis: bool = None, communication_style: str = None, preferred_response_length: str = None):
+    """
+    Обновляет пользовательские предпочтения.
+    """
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    
+    updates = []
+    params = []
+    
+    if use_emojis is not None:
+        updates.append("use_emojis = ?")
+        params.append(use_emojis)
+    
+    if communication_style is not None:
+        updates.append("communication_style = ?")
+        params.append(communication_style)
+    
+    if preferred_response_length is not None:
+        updates.append("preferred_response_length = ?")
+        params.append(preferred_response_length)
+    
+    if updates:
+        params.append(telegram_id)
+        query = f"UPDATE users SET {', '.join(updates)} WHERE telegram_id = ?"
+        cursor.execute(query, params)
+        connection.commit()
+    
+    connection.close()
+
+def get_user_preferences(telegram_id: int) -> dict:
+    """
+    Получает пользовательские предпочтения.
+    """
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    
+    cursor.execute(
+        "SELECT use_emojis, communication_style, preferred_response_length FROM users WHERE telegram_id = ?",
+        (telegram_id,)
+    )
+    result = cursor.fetchone()
+    connection.close()
+    
+    if result:
+        return {
+            'use_emojis': bool(result[0]) if result[0] is not None else True,
+            'communication_style': result[1] or 'friendly',
+            'preferred_response_length': result[2] or 'medium'
+        }
+    
+    return {
+        'use_emojis': True,
+        'communication_style': 'friendly',
+        'preferred_response_length': 'medium'
+    }
 
 if __name__ == "__main__":
     initialize_database()
